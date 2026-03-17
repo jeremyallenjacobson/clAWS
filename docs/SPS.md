@@ -57,6 +57,7 @@ The IDP POC is not a custom software product — it is a configured deployment o
 | 8 | Software Center Operator Manual (SCOM) | `SCOM.md` | Draft |
 | 9 | Software Product Specification (SPS) | `SPS.md` (this file) | Draft |
 | 10 | Software User Manual (SUM) | `SUM.md` | Draft |
+| 11 | Software Installation Plan (SIP) | `SIP.md` | Draft |
 
 ### 4.2 Configuration Artifacts
 

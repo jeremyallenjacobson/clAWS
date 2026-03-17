@@ -1,5 +1,9 @@
 .env
 .env.*
+!.env.example
 *.tfstate
 *.tfstate.*
 .terraform/
+
+# Vocareum confidential — shared privately, do not commit
+vocareum/
