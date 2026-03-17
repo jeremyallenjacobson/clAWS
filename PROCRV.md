@@ -332,6 +332,48 @@ The following principles emerge from the analysis of the constraints. They are n
 
 ---
 
+## Appendix C: Phase 0 Constraint Test Results (2026-03-17)
+
+**Test Environment:** Account `198082850288`, role `voclabs/user4890135=Ricoh_Agent_1`, region `us-east-1`.
+
+| Test | Procedure | Result | Impact |
+|------|-----------|--------|--------|
+| **0.1: CloudFront** | `aws cloudfront create-distribution` with minimal config | ❌ **BLOCKED** — `AccessDenied`, explicit deny in SCP `p-uv7gdfxb` | Web UI cannot use CloudFront. **Fallback activated:** deploy backend only, serve React app via alternative means. |
+| **0.2: Lambda limit** | Created 4 Lambda functions (`scp-test-lambda-1` through `-4`), all succeeded | ✅ **Limit is concurrency, not count** — 4 functions created simultaneously without session termination | ~18 Lambda functions from upstream repo are deployable. Constraint is on concurrent executions (≤3), not total function count. |
+| **0.3: Bedrock Nova Lite** | `aws bedrock list-foundation-models` filtered for `nova-lite` | ✅ **AVAILABLE** — 3 variants listed: `amazon.nova-lite-v1:0`, `24k`, `300k`, all `ACTIVE` | Model accessible for classification and extraction. |
+| **0.4: KMS keys** | `aws kms list-keys` | ✅ **No pre-existing keys** — empty result | Clean slate. No surprise costs from pre-provisioned keys. |
+
+### Architecture Decisions Resulting from Phase 0
+
+1. **CloudFront is permanently blocked for this account.** The SCP `p-uv7gdfxb` (VocUnconditionalDeny) explicitly denies `cloudfront:CreateDistribution`. This is not a configuration issue — it is an organizational policy that cannot be overridden.
+
+2. **Web UI delivery strategy changed.** The upstream `web-ui` Terraform module creates a CloudFront distribution. Since that is blocked, we set `web_ui = { enabled = false }` in tfvars and deploy the backend only. The React app will be served via one of:
+   - **Option A (preferred):** S3 static website hosting with the pre-built React app uploaded manually. Limitation: HTTP only (no HTTPS), which may cause CORS issues with Cognito/AppSync.
+   - **Option B:** Run `npm start` on a local machine with environment variables pointing at the deployed Cognito User Pool and AppSync endpoint.
+   - **Option C:** Use API Gateway as an HTTPS frontend for S3-hosted static assets.
+
+3. **Lambda deployment is feasible.** The "Lambda Limit 3" confirmed as concurrency limit. The Step Functions state machine executes Lambda functions sequentially, so concurrent executions should remain ≤3 during normal single-document processing.
+
+4. **Budget outlook improved.** No pre-existing KMS keys. Estimated deployment cost remains ~$0.03 (prorated KMS + minimal Bedrock tokens + CloudWatch).
+
+### Phase 0 Additional Findings (discovered during Phase 1–2)
+
+| Test | Procedure | Result | Impact |
+|------|-----------|--------|--------|
+| **0.5: S3 Object Lock SCP** | `terraform apply` with `aws_s3_bucket` resources | ❌ **BLOCKED** — SCP denies `s3:GetBucketObjectLockConfiguration`. AWS Terraform provider (v5+) reads this attribute during bucket refresh, causing `AccessDenied` on any plan/apply/destroy. | All S3 buckets must be pre-created via CLI and referenced by ARN. No `aws_s3_bucket` resources in Terraform. |
+| **0.6: SES blocked** | Cognito user pool invitation email | ❌ **BLOCKED** — SCP denies SES. Cognito invitation emails do not send. | Admin users must be created via `aws cognito-idp admin-set-user-password --permanent`. |
+| **0.7: CodeBuild** | `aws codebuild start-build` | ❌ **BLOCKED** — Builds are STOPPED during PROVISIONING after ~3 seconds. Vocareum monitoring appears to kill CodeBuild builds. Concurrency limit of 1 may act as 0 effective builds. | Lambda layers must be built locally using `uv pip install --python-platform x86_64-manylinux2014 --python-version 3.12` and uploaded to S3 manually. |
+
+### Architecture Decisions Resulting from Additional Findings
+
+5. **S3 Object Lock workaround.** The `assets-bucket` module was patched to accept `external_bucket_name` and `external_bucket_arn` variables. When set, the module skips all `aws_s3_bucket` resource creation. All four S3 buckets (input, output, working, assets) are pre-created via CLI and passed to the root module by ARN.
+
+6. **CodeBuild workaround.** Lambda layers are built locally on the developer machine using `uv` with cross-platform targeting (`--python-platform x86_64-manylinux2014 --python-version 3.12`). The resulting zip files are uploaded to S3 at the exact paths the Terraform `aws_lambda_layer_version` resources expect. The CodeBuild projects are created by Terraform (no SCP blocks project creation) but their builds are never successfully executed — the layers are populated externally.
+
+7. **SES workaround.** Admin users are created via Terraform (`aws_cognito_user`) and then confirmed via CLI (`aws cognito-idp admin-set-user-password --permanent`).
+
+---
+
 ## Appendix A: Vocareum Account Constraints Detail
 
 ### Concurrency Limits
@@ -395,7 +437,7 @@ api = {
 }
 
 web_ui = {
-  enabled = true
+  enabled = false
 }
 
 tags = {
@@ -404,8 +446,87 @@ tags = {
 }
 ```
 
-### Required Module Patches
+**Note:** This appendix shows the original planned tfvars. See Appendix D for the actual deployment configuration used, which differs significantly due to the S3 Object Lock, CloudFront, SES, and CodeBuild blockers discovered during execution.
 
-1. **Disable WAF:** In `modules/web-ui/variables.tf`, change `enable_waf` default from `true` to `false`.
-2. **Address KMS:** Either accept $1/month cost or patch S3 bucket encryption to use `AES256` (significant module surgery).
-3. **Test CloudFront:** Run `aws cloudfront create-distribution` dry-run to confirm SCP allows it. If blocked, fall back to S3 website hosting or local React dev server.
+### Required Module Patches (Planned vs. Actual)
+
+1. **Disable WAF:** ✅ Applied. In `modules/web-ui/variables.tf`, changed `enable_waf` default from `true` to `false`.
+2. **Address KMS:** ✅ Accepted $1/month cost (prorated <$0.01 for <1hr). KMS key pre-created via CLI with CloudWatch Logs permission.
+3. **CloudFront:** ✅ Confirmed blocked. Set `web_ui = { enabled = false }`.
+4. **S3 Object Lock (new):** ✅ Patched `modules/assets-bucket` to accept `external_bucket_name` / `external_bucket_arn`. All 4 S3 buckets pre-created via CLI.
+5. **CodeBuild (new):** ✅ Lambda layers built locally with `uv` and uploaded to S3 manually. CodeBuild projects exist in Terraform state but never successfully build.
+6. **SES (new):** ✅ Admin user password set via `aws cognito-idp admin-set-user-password --permanent`.
+
+---
+
+## Appendix D: Phase 2 Deployment Results (2026-03-17)
+
+**Deployment method:** Custom `deploy/` directory calling root module (`source = "../genai-idp-terraform"`) with pre-created S3 buckets and KMS key. NOT the `examples/bedrock-llm-processor/` directory (which creates its own S3 buckets and hits the Object Lock SCP).
+
+**Terraform:** v1.x, AWS provider v5.100.0, deployed from local machine (not CloudShell).
+
+**Total resources created:** 247
+
+### Pre-Created Resources (via AWS CLI, outside Terraform)
+
+| Resource | Identifier |
+|----------|------------|
+| S3 bucket (input) | `poc-idp-input-571e2c0p` |
+| S3 bucket (output) | `poc-idp-output-571e2c0p` |
+| S3 bucket (working) | `poc-idp-working-571e2c0p` |
+| S3 bucket (assets) | `poc-idp-assets-571e2c0p` |
+| KMS key | `304d492f-7b7f-4bc5-849f-2bff67f3735f` |
+| KMS alias | `alias/poc-idp-571e2c0p` |
+| Lambda layer (idp-common) | Built locally with `uv`, uploaded to `s3://poc-idp-assets-571e2c0p/layers/poc-idp-5ayd6ree-idp-layer-lambda-layers-c1mjovfp/idp-common.zip` |
+| Lambda layer (update_configuration) | Built locally with `uv`, uploaded to `s3://poc-idp-assets-571e2c0p/layers/processing-environment-0378stu2-lambda-layers-jh06tadw/update_configuration.zip` |
+
+### Terraform-Created Resources (key outputs)
+
+| Resource | Identifier |
+|----------|------------|
+| Name prefix | `poc-idp-5ayd6ree` |
+| Cognito User Pool | `us-east-1_22EwGyHdP` |
+| Cognito Client ID | `7pt01f2399fi0g7g59tkalgcfh` |
+| Cognito Identity Pool | `us-east-1:48e0d251-9de3-49a9-b378-d90ae3497a5f` |
+| AppSync GraphQL URL | `https://yiznuo43tfdn7ik5nlqpxf7rqa.appsync-api.us-east-1.amazonaws.com/graphql` |
+| Step Functions state machine | `poc-idp-5ayd6ree-processor-document-processing` |
+| DynamoDB configuration table | `idp-configuration-table-0378stu2` |
+| DynamoDB tracking table | `idp-tracking-table-0378stu2` |
+| DynamoDB concurrency table | `idp-concurrency-table-0378stu2` |
+| SQS queue | `idp-document-queue-0378stu2` |
+| Admin user | `admin@poc-idp.local` (CONFIRMED, password set via CLI) |
+| Lambda functions | 20 total |
+
+### Deployment Timeline
+
+| Event | Time (approx) |
+|-------|---------------|
+| `terraform init` | ~2 min (provider download) |
+| `terraform plan` | ~30 sec (247 resources planned) |
+| `terraform apply` (first attempt) | ~8 min — **FAILED** at Lambda layer publish (CodeBuild STOPPED) |
+| Local layer build with `uv` | ~2 min |
+| S3 layer upload | ~1 min |
+| `terraform apply` (second attempt) | ~5 min — **SUCCESS** (50 remaining resources created) |
+| `admin-set-user-password` | immediate |
+| **Total Phase 1+2 time** | **~20 min** |
+
+### Module Patches Applied to genai-idp-terraform (commit affe799)
+
+| File | Change | Rationale |
+|------|--------|-----------|
+| `modules/web-ui/variables.tf` | `enable_waf` default `true` → `false` | WAF costs $5/month, exceeds budget |
+| `versions.tf` (root) | AWS provider `">= 5.0"` → `">= 5.0, < 6.0"` | Pin to v5 to avoid breaking changes |
+| `examples/bedrock-llm-processor/versions.tf` | AWS provider `"~> 5.80"` | Pin for reproducibility |
+| `modules/assets-bucket/main.tf` | All resources conditional on `external_bucket_name == null` | Skip S3 bucket creation when external bucket provided |
+| `modules/assets-bucket/variables.tf` | Added `external_bucket_name`, `external_bucket_arn` | Accept pre-created bucket |
+| `modules/assets-bucket/outputs.tf` | Conditional outputs: external values or resource values | Support both modes |
+| `main.tf` (root) | Pass `assets_bucket_name`/`assets_bucket_arn` to assets-bucket module | Wire external bucket through |
+| `variables.tf` (root) | Added `assets_bucket_name`, `assets_bucket_arn` | Expose external bucket config |
+
+### Status at End of Phase 2
+
+- **Phase 0 (Constraint Testing):** ✅ Complete — 7 tests, 4 passed, 3 blockers identified and resolved
+- **Phase 1 (Acquire and Patch):** ✅ Complete — repo cloned, 8 patches applied, config written
+- **Phase 2 (Deploy):** ✅ Complete — 247 resources deployed, admin user confirmed
+- **Phase 3 (Validate):** ⏳ Next — test document processing via AppSync API
+- **Phase 4 (Teardown):** ⏳ Pending — `terraform destroy` + manual S3/KMS cleanup

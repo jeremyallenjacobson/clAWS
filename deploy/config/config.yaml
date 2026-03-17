@@ -1,0 +1,122 @@
+# Minimal IDP config for POC — constrained budget
+# Uses Nova Lite for all LLM calls to minimize token costs
+notes: Minimal POC configuration for constrained deployment
+ocr:
+  backend: "textract"
+  features:
+    - name: LAYOUT
+    - name: TABLES
+  image:
+    target_width: ""
+    target_height: ""
+classes:
+  - $schema: https://json-schema.org/draft/2020-12/schema
+    description: >-
+      A generic document for field extraction. Upload any document and
+      the system will extract the fields defined below.
+    type: object
+    x-aws-idp-document-type: GenericDocument
+    properties:
+      DocumentTitle:
+        type: string
+        description: The title or heading of the document.
+      DocumentDate:
+        format: date
+        type: string
+        description: The date on the document (MM/DD/YYYY).
+      DocumentType:
+        type: string
+        description: The type or category of document (invoice, receipt, form, letter, etc).
+      KeyFields:
+        type: object
+        description: Key fields extracted from the document.
+        properties:
+          Field1Name:
+            type: string
+            description: Name of the first key field found.
+          Field1Value:
+            type: string
+            description: Value of the first key field found.
+          Field2Name:
+            type: string
+            description: Name of the second key field found.
+          Field2Value:
+            type: string
+            description: Value of the second key field found.
+          Field3Name:
+            type: string
+            description: Name of the third key field found.
+          Field3Value:
+            type: string
+            description: Value of the third key field found.
+classification:
+  top_p: "0.0"
+  max_tokens: "500"
+  top_k: "5"
+  task_prompt: >-
+    Classify the following document into one of these categories: GenericDocument
+
+    <document-text>
+    {DOCUMENT_TEXT}
+    </document-text>
+
+    Return a JSON object with the key "document_class" and the value being the classification.
+  temperature: "0.0"
+  model: us.amazon.nova-lite-v1:0
+  system_prompt: >-
+    You are a document classification expert. Classify documents accurately.
+    Respond only with JSON.
+extraction:
+  top_p: "0.0"
+  max_tokens: "2000"
+  top_k: "5"
+  task_prompt: >-
+    Extract key information from the following document.
+
+    If the attributes section below contains a list of attribute names and
+    descriptions, then output only those attributes, using the provided
+    descriptions as guidance for finding the correct values.
+
+    <attributes>
+    {ATTRIBUTE_NAMES_AND_DESCRIPTIONS}
+    </attributes>
+
+    <document-text>
+    {DOCUMENT_TEXT}
+    </document-text>
+
+    <final-instructions>
+    Extract key information from the document and return a JSON object.
+    Use null for any fields not found in the document.
+    </final-instructions>
+  temperature: "0.0"
+  model: us.amazon.nova-lite-v1:0
+  system_prompt: >-
+    You are a document assistant. Respond only with JSON. Never make up data.
+summarization:
+  enabled: false
+assessment:
+  enabled: true
+  validation_enabled: false
+  granular:
+    enabled: false
+  default_confidence_threshold: "0.8"
+  top_p: "0.0"
+  max_tokens: "2000"
+  top_k: "5"
+  temperature: "0.0"
+  model: us.amazon.nova-lite-v1:0
+  system_prompt: >-
+    You are a document analysis assessment expert. Provide confidence scores.
+  task_prompt: >-
+    Analyze the extraction results against the source document and provide
+    confidence assessments for each extracted attribute. Return a JSON object
+    with confidence scores between 0.0 and 1.0 for each field.
+
+    <document-text>
+    {DOCUMENT_TEXT}
+    </document-text>
+
+    <extraction-results>
+    {EXTRACTION_RESULTS}
+    </extraction-results>
