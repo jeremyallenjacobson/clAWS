@@ -32,36 +32,37 @@ The IDP POC provides a CLI-based document processing pipeline for intelligent do
 
 ### 3.1 CLI Access (Primary Method)
 
-The web UI is not deployed (CloudFront is SCP-blocked). All interaction is via AWS CLI.
+The web UI is not deployed (CloudFront is SCP-blocked). All interaction is via AWS CLI using IAM credentials from the Vocareum session.
 
 **Prerequisites:**
 - AWS credentials configured (see SCOM Section 3)
 - AWS CLI v2 installed
 
-**Authentication:**
+**Load credentials:**
 ```bash
 source ~/Projects/clAWS/.env
 
-# Authenticate and get JWT tokens
-aws cognito-idp initiate-auth \
-  --auth-flow USER_PASSWORD_AUTH \
-  --client-id 7pt01f2399fi0g7g59tkalgcfh \
-  --auth-parameters USERNAME=admin@poc-idp.local,PASSWORD='P0c-Idp!2026#Eval' \
-  --region us-east-1
+# Verify access
+aws sts get-caller-identity
+# Expected: Account 198082850288, role voclabs/user*
 ```
+
+All CLI commands (`aws s3 cp`, `aws stepfunctions`, etc.) authenticate using these IAM session credentials — no additional login step is required.
 
 ---
 
-## 4. Registration and Login
+## 4. Cognito User Identity
+
+Cognito is deployed for the web UI authentication flow (AppSync API). Since the web UI is not deployed in this POC, Cognito is not used during CLI-based document processing. The information below is recorded for completeness.
 
 ### 4.1 Admin User (Pre-Created)
 
-The admin user is pre-configured during deployment:
+- **User Pool ID:** `us-east-1_22EwGyHdP`
 - **Email:** `admin@poc-idp.local`
 - **Password:** `P0c-Idp!2026#Eval`
 - **Group:** Admin
 
-SES is SCP-blocked, so email-based registration is not possible. The admin user's password was set via:
+SES is SCP-blocked, so the admin user's password was set via CLI:
 ```bash
 aws cognito-idp admin-set-user-password \
   --user-pool-id us-east-1_22EwGyHdP \
@@ -70,18 +71,13 @@ aws cognito-idp admin-set-user-password \
   --permanent
 ```
 
-### 4.2 Verify Authentication
+### 4.2 When Cognito Auth Is Needed
 
-```bash
-aws cognito-idp initiate-auth \
-  --auth-flow USER_PASSWORD_AUTH \
-  --client-id 7pt01f2399fi0g7g59tkalgcfh \
-  --auth-parameters USERNAME=admin@poc-idp.local,PASSWORD='P0c-Idp!2026#Eval' \
-  --region us-east-1 \
-  --query 'AuthenticationResult.AccessToken' --output text
-```
+Cognito authentication (JWT tokens) would be required if:
+- A web UI were deployed and accessed via a browser (AppSync GraphQL API requires Cognito JWT)
+- A local React dev server were used to interact with the AppSync API
 
-A valid JWT token is returned on success.
+It is **not** needed for the CLI workflow described in Sections 6–7, which uses IAM credentials to interact directly with S3 and Step Functions.
 
 ---
 
