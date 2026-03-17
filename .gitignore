@@ -5,5 +5,9 @@
 *.tfstate.*
 .terraform/
 
+# Local caches (zero-trace — kept inside project instead of ~/*)
+.terraform-cache/
+.npm-cache/
+
 # Vocareum confidential — shared privately, do not commit
 vocareum/

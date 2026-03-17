@@ -189,8 +189,10 @@ The `modules/assets-bucket` module must be patched to accept `external_bucket_na
 CodeBuild is killed by Vocareum during the PROVISIONING phase. Lambda layers must be built locally and uploaded to S3.
 
 ```bash
-# Install uv if not present
-pip install uv 2>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install uv locally (inside clAWS — not system-wide)
+pip install --target="$(pwd)/bin/pylib" uv 2>/dev/null
+export PYTHONPATH="$(pwd)/bin/pylib:${PYTHONPATH:-}"
+export PATH="$(pwd)/bin/pylib/bin:$PATH"
 
 # For each Lambda layer with a requirements.txt:
 # (The exact layers and their requirements depend on the upstream repo version.
