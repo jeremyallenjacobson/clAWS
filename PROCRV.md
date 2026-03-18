@@ -32,8 +32,8 @@ This document describes the operating concept for deploying a minimal IDP web in
 |---|----------|--------|
 | 1 | genai-idp-terraform repository | https://github.com/awslabs/genai-idp-terraform.git |
 | 2 | Vocareum Concurrency Limits | Provided by course administrator (see Appendix A) |
-| 3 | Vocareum SCPs (VocProtections, VocUnconditionalDeny, VocConditionalDeny, VocRestrictRegions) | Provided by course administrator (see Appendix A) |
-| 4 | Vocareum IAM Policy (Allow All) | Course: Ricoh USA Eval 2026, Assignment: Credentials for AI Agents, Part 1 |
+| 3 | Vocareum SCPs | Provided by course administrator (see Appendix A) |
+| 4 | Vocareum IAM Policy | Course: Ricoh USA Eval 2026, Assignment: Credentials for AI Agents, Part 1 |
 | 5 | MIL-STD-498 OCD DID (DI-IPSC-81430) | Structural basis for this document |
 | 6 | Peter Naur, "Programming as Theory Building" (1985) | Theoretical basis for Section 8 |
 
@@ -74,13 +74,13 @@ The account operates under the following hard constraints:
 |----------|-------|
 | EC2 Instances | 3 |
 
-**Region Restriction:** All resources must be in `us-east-1`. The `VocRestrictRegions` SCP denies most service actions outside this region.
+**Region Restriction:** All resources must be in `us-east-1`. An SCP denies most service actions outside this region.
 
-**Service Denials (VocUnconditionalDeny SCP):** SES, Lightsail, CloudFront create-distribution (some actions), Route53 domain registration, Glacier, Redshift reserved, RDS reserved, most EC2 reserved/capacity/FPGA actions, and AWS Marketplace subscriptions (except whitelisted Bedrock model product IDs).
+**Service Denials (SCP-enforced):** SES, Lightsail, CloudFront create-distribution (some actions), Route53 domain registration, Glacier, Redshift reserved, RDS reserved, most EC2 reserved/capacity/FPGA actions, and AWS Marketplace subscriptions (except whitelisted Bedrock model product IDs).
 
-**Instance Type Restrictions (VocConditionalDeny SCP):** EC2 limited to `*.nano`, `*.micro`, `*.small`, `*.medium`, `*.large`. EBS volumes limited to `gp2`, max 50 GB, 0 provisioned IOPS. RDS limited to `*.micro`, `*.small`, `*.medium` with max 100 GB storage. SageMaker limited to `ml.t2/t3.medium/large`, `ml.c4/c5.large/xlarge`, `ml.m4/m5.large/xlarge`.
+**Instance Type Restrictions (SCP-enforced):** EC2 limited to `*.nano`, `*.micro`, `*.small`, `*.medium`, `*.large`. EBS volumes limited to `gp2`, max 50 GB, 0 provisioned IOPS. RDS limited to `*.micro`, `*.small`, `*.medium` with max 100 GB storage. SageMaker limited to `ml.t2/t3.medium/large`, `ml.c4/c5.large/xlarge`, `ml.m4/m5.large/xlarge`.
 
-**Protected Resources (VocProtections SCP):** The `vocareum` IAM role, `vocareum-eventbridge` role, `voclabs` role, `vocuser` IAM user, and associated policies cannot be modified. EventBridge rules matching `voc-*` are protected.
+**Protected Resources (SCP-enforced):** Platform-managed IAM roles, users, and associated policies cannot be modified. EventBridge rules matching `voc-*` are protected.
 
 ### 3.3 Description of Current System
 
@@ -123,7 +123,7 @@ The following changes to the default `genai-idp-terraform` deployment are needed
 
 6. **Address the Lambda concurrency constraint.** The minimal deployment creates ~18 Lambda functions. The Vocareum "Lambda Limit 3" may refer to concurrent executions, concurrent functions, or some other metric. If it means concurrent executions, the system must process documents sequentially. If it means total functions, the deployment cannot proceed without negotiating a higher limit or re-architecting.
 
-7. **Disable CloudFront create-distribution if blocked by SCP.** The `VocUnconditionalDeny` SCP lists `cloudfront:CreateDistribution` as denied. This directly blocks the `web-ui` module's CloudFront distribution. **This is a critical blocker** — the web UI cannot be deployed as designed without CloudFront. Alternatives: serve the React app from S3 website hosting directly, or use API Gateway + Lambda to proxy the SPA.
+7. **Disable CloudFront create-distribution if blocked by SCP.** An SCP denies `cloudfront:CreateDistribution`. This directly blocks the `web-ui` module's CloudFront distribution. **This is a critical blocker** — the web UI cannot be deployed as designed without CloudFront. Alternatives: serve the React app from S3 website hosting directly, or use API Gateway + Lambda to proxy the SPA.
 
 ### 4.3 Priorities Among Changes
 
@@ -351,16 +351,26 @@ The following principles emerge from the analysis of the constraints. They are n
 | DynamoDB On-Demand Read Capacity | 1,000 | — |
 | DynamoDB On-Demand Write Capacity | 1,000 | — |
 
-### SCPs Summary
+### Introspecting Account Restrictions
 
-- **VocProtections:** Protects `vocareum`, `vocareum-eventbridge`, `voclabs` roles and `vocuser` user from modification.
-- **VocUnconditionalDeny:** Denies SES, Lightsail, most CloudFront creation, Glacier, reserved instance purchases, Route53 domain registration, S3 object lock, billing portal access. Marketplace subscriptions denied except for whitelisted Bedrock model product IDs.
-- **VocConditionalDeny:** Restricts EC2 to small instance types and `gp2` volumes (≤50 GB). Restricts RDS to micro/small/medium classes (≤100 GB). Restricts SageMaker to specific instance types. Restricts Cloud9 to small instances.
-- **VocRestrictRegions:** All listed services denied outside `us-east-1`.
+The account is governed by SCPs and IAM policies managed by the platform. To discover the current restrictions, run:
 
-### IAM Policy
+```bash
+# List SCPs affecting this account (requires Organizations read access)
+aws organizations list-policies-for-target --target-id $(aws sts get-caller-identity --query Account --output text) --filter SERVICE_CONTROL_POLICY
 
-Allow All (`"Effect": "Allow", "Action": "*", "Resource": "*"`). No restrictions at the assignment level — only SCP-level restrictions apply.
+# View a specific SCP's content
+aws organizations describe-policy --policy-id <policy-id>
+
+# List policies on the assumed role
+aws iam list-attached-role-policies --role-name <role-name>
+aws iam list-role-policies --role-name <role-name>
+
+# Test whether a specific action is allowed (EC2 example)
+aws ec2 run-instances --dry-run --image-id ami-0c02fb55956c7d316 --instance-type t2.micro
+```
+
+**Note:** Some introspection calls may themselves be denied by SCPs. If a command returns `AccessDenied`, that denial is itself useful information. See the validated blocks and working services tables in AGENTS.md for the current known state.
 
 ## Appendix B: Minimal terraform.tfvars
 
@@ -493,18 +503,18 @@ tags = {
 
 ## Appendix C: Phase 0 Constraint Test Results (2026-03-17)
 
-**Test Environment:** Account `198082850288`, role `voclabs/user4890135=Ricoh_Agent_1`, region `us-east-1`.
+**Test Environment:** Vocareum-managed sandbox account, `us-east-1`.
 
 | Test | Procedure | Result | Impact |
 |------|-----------|--------|--------|
-| **0.1: CloudFront** | `aws cloudfront create-distribution` with minimal config | ❌ **BLOCKED** — `AccessDenied`, explicit deny in SCP `p-uv7gdfxb` | Web UI cannot use CloudFront. **Fallback activated:** deploy backend only, serve React app via alternative means. |
+| **0.1: CloudFront** | `aws cloudfront create-distribution` with minimal config | ❌ **BLOCKED** — `AccessDenied`, explicit deny in SCP | Web UI cannot use CloudFront. **Fallback activated:** deploy backend only, serve React app via alternative means. |
 | **0.2: Lambda limit** | Created 4 Lambda functions (`scp-test-lambda-1` through `-4`), all succeeded | ✅ **Limit is concurrency, not count** — 4 functions created simultaneously without session termination | ~18 Lambda functions from upstream repo are deployable. Constraint is on concurrent executions (≤3), not total function count. |
 | **0.3: Bedrock Nova Lite** | `aws bedrock list-foundation-models` filtered for `nova-lite` | ✅ **AVAILABLE** — 3 variants listed: `amazon.nova-lite-v1:0`, `24k`, `300k`, all `ACTIVE` | Model accessible for classification and extraction. |
 | **0.4: KMS keys** | `aws kms list-keys` | ✅ **No pre-existing keys** — empty result | Clean slate. No surprise costs from pre-provisioned keys. |
 
 ### Architecture Decisions Resulting from Phase 0
 
-1. **CloudFront is permanently blocked for this account.** The SCP `p-uv7gdfxb` (VocUnconditionalDeny) explicitly denies `cloudfront:CreateDistribution`. This is not a configuration issue — it is an organizational policy that cannot be overridden.
+1. **CloudFront is permanently blocked for this account.** An SCP explicitly denies `cloudfront:CreateDistribution`. This is not a configuration issue — it is an organizational policy that cannot be overridden.
 
 2. **Web UI delivery strategy changed.** The upstream `web-ui` Terraform module creates a CloudFront distribution. Since that is blocked, we set `web_ui = { enabled = false }` in tfvars and deploy the backend only. The React app will be served via one of:
    - **Option A (preferred):** S3 static website hosting with the pre-built React app uploaded manually. Limitation: HTTP only (no HTTPS), which may cause CORS issues with Cognito/AppSync.
