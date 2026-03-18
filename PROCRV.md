@@ -332,48 +332,6 @@ The following principles emerge from the analysis of the constraints. They are n
 
 ---
 
-## Appendix C: Phase 0 Constraint Test Results (2026-03-17)
-
-**Test Environment:** Account `198082850288`, role `voclabs/user4890135=Ricoh_Agent_1`, region `us-east-1`.
-
-| Test | Procedure | Result | Impact |
-|------|-----------|--------|--------|
-| **0.1: CloudFront** | `aws cloudfront create-distribution` with minimal config | ❌ **BLOCKED** — `AccessDenied`, explicit deny in SCP `p-uv7gdfxb` | Web UI cannot use CloudFront. **Fallback activated:** deploy backend only, serve React app via alternative means. |
-| **0.2: Lambda limit** | Created 4 Lambda functions (`scp-test-lambda-1` through `-4`), all succeeded | ✅ **Limit is concurrency, not count** — 4 functions created simultaneously without session termination | ~18 Lambda functions from upstream repo are deployable. Constraint is on concurrent executions (≤3), not total function count. |
-| **0.3: Bedrock Nova Lite** | `aws bedrock list-foundation-models` filtered for `nova-lite` | ✅ **AVAILABLE** — 3 variants listed: `amazon.nova-lite-v1:0`, `24k`, `300k`, all `ACTIVE` | Model accessible for classification and extraction. |
-| **0.4: KMS keys** | `aws kms list-keys` | ✅ **No pre-existing keys** — empty result | Clean slate. No surprise costs from pre-provisioned keys. |
-
-### Architecture Decisions Resulting from Phase 0
-
-1. **CloudFront is permanently blocked for this account.** The SCP `p-uv7gdfxb` (VocUnconditionalDeny) explicitly denies `cloudfront:CreateDistribution`. This is not a configuration issue — it is an organizational policy that cannot be overridden.
-
-2. **Web UI delivery strategy changed.** The upstream `web-ui` Terraform module creates a CloudFront distribution. Since that is blocked, we set `web_ui = { enabled = false }` in tfvars and deploy the backend only. The React app will be served via one of:
-   - **Option A (preferred):** S3 static website hosting with the pre-built React app uploaded manually. Limitation: HTTP only (no HTTPS), which may cause CORS issues with Cognito/AppSync.
-   - **Option B:** Run `npm start` on a local machine with environment variables pointing at the deployed Cognito User Pool and AppSync endpoint.
-   - **Option C:** Use API Gateway as an HTTPS frontend for S3-hosted static assets.
-
-3. **Lambda deployment is feasible.** The "Lambda Limit 3" confirmed as concurrency limit. The Step Functions state machine executes Lambda functions sequentially, so concurrent executions should remain ≤3 during normal single-document processing.
-
-4. **Budget outlook improved.** No pre-existing KMS keys. Estimated deployment cost remains ~$0.03 (prorated KMS + minimal Bedrock tokens + CloudWatch).
-
-### Phase 0 Additional Findings (discovered during Phase 1–2)
-
-| Test | Procedure | Result | Impact |
-|------|-----------|--------|--------|
-| **0.5: S3 Object Lock SCP** | `terraform apply` with `aws_s3_bucket` resources | ❌ **BLOCKED** — SCP denies `s3:GetBucketObjectLockConfiguration`. AWS Terraform provider (v5+) reads this attribute during bucket refresh, causing `AccessDenied` on any plan/apply/destroy. | All S3 buckets must be pre-created via CLI and referenced by ARN. No `aws_s3_bucket` resources in Terraform. |
-| **0.6: SES blocked** | Cognito user pool invitation email | ❌ **BLOCKED** — SCP denies SES. Cognito invitation emails do not send. | Admin users must be created via `aws cognito-idp admin-set-user-password --permanent`. |
-| **0.7: CodeBuild** | `aws codebuild start-build` | ❌ **BLOCKED** — Builds are STOPPED during PROVISIONING after ~3 seconds. Vocareum monitoring appears to kill CodeBuild builds. Concurrency limit of 1 may act as 0 effective builds. | Lambda layers must be built locally using `uv pip install --python-platform x86_64-manylinux2014 --python-version 3.12` and uploaded to S3 manually. |
-
-### Architecture Decisions Resulting from Additional Findings
-
-5. **S3 Object Lock workaround.** The `assets-bucket` module was patched to accept `external_bucket_name` and `external_bucket_arn` variables. When set, the module skips all `aws_s3_bucket` resource creation. All four S3 buckets (input, output, working, assets) are pre-created via CLI and passed to the root module by ARN.
-
-6. **CodeBuild workaround.** Lambda layers are built locally on the developer machine using `uv` with cross-platform targeting (`--python-platform x86_64-manylinux2014 --python-version 3.12`). The resulting zip files are uploaded to S3 at the exact paths the Terraform `aws_lambda_layer_version` resources expect. The CodeBuild projects are created by Terraform (no SCP blocks project creation) but their builds are never successfully executed — the layers are populated externally.
-
-7. **SES workaround.** Admin users are created via Terraform (`aws_cognito_user`) and then confirmed via CLI (`aws cognito-idp admin-set-user-password --permanent`).
-
----
-
 ## Appendix A: Vocareum Account Constraints Detail
 
 ### Concurrency Limits
@@ -530,3 +488,45 @@ tags = {
 - **Phase 2 (Deploy):** ✅ Complete — 247 resources deployed, admin user confirmed
 - **Phase 3 (Validate):** ⏳ Next — test document processing via AppSync API
 - **Phase 4 (Teardown):** ⏳ Pending — `terraform destroy` + manual S3/KMS cleanup
+
+---
+
+## Appendix C: Phase 0 Constraint Test Results (2026-03-17)
+
+**Test Environment:** Account `198082850288`, role `voclabs/user4890135=Ricoh_Agent_1`, region `us-east-1`.
+
+| Test | Procedure | Result | Impact |
+|------|-----------|--------|--------|
+| **0.1: CloudFront** | `aws cloudfront create-distribution` with minimal config | ❌ **BLOCKED** — `AccessDenied`, explicit deny in SCP `p-uv7gdfxb` | Web UI cannot use CloudFront. **Fallback activated:** deploy backend only, serve React app via alternative means. |
+| **0.2: Lambda limit** | Created 4 Lambda functions (`scp-test-lambda-1` through `-4`), all succeeded | ✅ **Limit is concurrency, not count** — 4 functions created simultaneously without session termination | ~18 Lambda functions from upstream repo are deployable. Constraint is on concurrent executions (≤3), not total function count. |
+| **0.3: Bedrock Nova Lite** | `aws bedrock list-foundation-models` filtered for `nova-lite` | ✅ **AVAILABLE** — 3 variants listed: `amazon.nova-lite-v1:0`, `24k`, `300k`, all `ACTIVE` | Model accessible for classification and extraction. |
+| **0.4: KMS keys** | `aws kms list-keys` | ✅ **No pre-existing keys** — empty result | Clean slate. No surprise costs from pre-provisioned keys. |
+
+### Architecture Decisions Resulting from Phase 0
+
+1. **CloudFront is permanently blocked for this account.** The SCP `p-uv7gdfxb` (VocUnconditionalDeny) explicitly denies `cloudfront:CreateDistribution`. This is not a configuration issue — it is an organizational policy that cannot be overridden.
+
+2. **Web UI delivery strategy changed.** The upstream `web-ui` Terraform module creates a CloudFront distribution. Since that is blocked, we set `web_ui = { enabled = false }` in tfvars and deploy the backend only. The React app will be served via one of:
+   - **Option A (preferred):** S3 static website hosting with the pre-built React app uploaded manually. Limitation: HTTP only (no HTTPS), which may cause CORS issues with Cognito/AppSync.
+   - **Option B:** Run `npm start` on a local machine with environment variables pointing at the deployed Cognito User Pool and AppSync endpoint.
+   - **Option C:** Use API Gateway as an HTTPS frontend for S3-hosted static assets.
+
+3. **Lambda deployment is feasible.** The "Lambda Limit 3" confirmed as concurrency limit. The Step Functions state machine executes Lambda functions sequentially, so concurrent executions should remain ≤3 during normal single-document processing.
+
+4. **Budget outlook improved.** No pre-existing KMS keys. Estimated deployment cost remains ~$0.03 (prorated KMS + minimal Bedrock tokens + CloudWatch).
+
+### Phase 0 Additional Findings (discovered during Phase 1–2)
+
+| Test | Procedure | Result | Impact |
+|------|-----------|--------|--------|
+| **0.5: S3 Object Lock SCP** | `terraform apply` with `aws_s3_bucket` resources | ❌ **BLOCKED** — SCP denies `s3:GetBucketObjectLockConfiguration`. AWS Terraform provider (v5+) reads this attribute during bucket refresh, causing `AccessDenied` on any plan/apply/destroy. | All S3 buckets must be pre-created via CLI and referenced by ARN. No `aws_s3_bucket` resources in Terraform. |
+| **0.6: SES blocked** | Cognito user pool invitation email | ❌ **BLOCKED** — SCP denies SES. Cognito invitation emails do not send. | Admin users must be created via `aws cognito-idp admin-set-user-password --permanent`. |
+| **0.7: CodeBuild** | `aws codebuild start-build` | ❌ **BLOCKED** — Builds are STOPPED during PROVISIONING after ~3 seconds. Vocareum monitoring appears to kill CodeBuild builds. Concurrency limit of 1 may act as 0 effective builds. | Lambda layers must be built locally using `uv pip install --python-platform x86_64-manylinux2014 --python-version 3.12` and uploaded to S3 manually. |
+
+### Architecture Decisions Resulting from Additional Findings
+
+5. **S3 Object Lock workaround.** The `assets-bucket` module was patched to accept `external_bucket_name` and `external_bucket_arn` variables. When set, the module skips all `aws_s3_bucket` resource creation. All four S3 buckets (input, output, working, assets) are pre-created via CLI and passed to the root module by ARN.
+
+6. **CodeBuild workaround.** Lambda layers are built locally on the developer machine using `uv` with cross-platform targeting (`--python-platform x86_64-manylinux2014 --python-version 3.12`). The resulting zip files are uploaded to S3 at the exact paths the Terraform `aws_lambda_layer_version` resources expect. The CodeBuild projects are created by Terraform (no SCP blocks project creation) but their builds are never successfully executed — the layers are populated externally.
+
+7. **SES workaround.** Admin users are created via Terraform (`aws_cognito_user`) and then confirmed via CLI (`aws cognito-idp admin-set-user-password --permanent`).
