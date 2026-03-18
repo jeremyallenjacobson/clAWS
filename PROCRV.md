@@ -353,24 +353,18 @@ The following principles emerge from the analysis of the constraints. They are n
 
 ### Introspecting Account Restrictions
 
-The account is governed by SCPs and IAM policies managed by the platform. To discover the current restrictions, run:
+The account is governed by SCPs and IAM policies managed by the platform. Organizations-level introspection (`aws organizations list-policies-for-target`, `describe-policy`) is denied. The following commands work:
 
 ```bash
-# List SCPs affecting this account (requires Organizations read access)
-aws organizations list-policies-for-target --target-id $(aws sts get-caller-identity --query Account --output text) --filter SERVICE_CONTROL_POLICY
-
-# View a specific SCP's content
-aws organizations describe-policy --policy-id <policy-id>
-
 # List policies on the assumed role
-aws iam list-attached-role-policies --role-name <role-name>
-aws iam list-role-policies --role-name <role-name>
+aws iam list-attached-role-policies --role-name <role-from-sts-get-caller-identity>
+aws iam list-role-policies --role-name <role-from-sts-get-caller-identity>
 
-# Test whether a specific action is allowed (EC2 example)
+# Test whether a specific action is allowed (EC2 example — dry-run does not create resources)
 aws ec2 run-instances --dry-run --image-id ami-0c02fb55956c7d316 --instance-type t2.micro
 ```
 
-**Note:** Some introspection calls may themselves be denied by SCPs. If a command returns `AccessDenied`, that denial is itself useful information. See the validated blocks and working services tables in AGENTS.md for the current known state.
+**Note:** If a command returns `AccessDenied`, that denial is itself useful information. See the validated blocks and working services tables in AGENTS.md for the current known state.
 
 ## Appendix B: Minimal terraform.tfvars
 
