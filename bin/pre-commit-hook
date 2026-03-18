@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Pre-commit hook: scan staged files for secrets before allowing commit.
+#
+# Checks for:
+#   - AWS Access Key IDs (AKIA*, ASIA*)
+#   - AWS Secret Access Keys (40-char base64 strings)
+#   - AWS Session Tokens (long base64 strings after known variable names)
+#   - Files that should never be committed (.env, vocareum/)
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+ERRORS=0
+
+# ── Check 1: Blocked file paths ──────────────────────────
+BLOCKED_PATTERNS=(
+  "^\.env$"
+  "^vocareum/"
+  "\.tfstate$"
+  "\.tfstate\."
+)
+
+for pattern in "${BLOCKED_PATTERNS[@]}"; do
+  MATCHES=$(git diff --cached --name-only | grep -E "$pattern" || true)
+  if [ -n "$MATCHES" ]; then
+    echo -e "${RED}✗ BLOCKED FILE staged for commit:${NC}"
+    echo "$MATCHES" | while read -r f; do echo "    $f"; done
+    ERRORS=$((ERRORS + 1))
+  fi
+done
+
+# ── Check 2: AWS Access Key IDs ──────────────────────────
+# AKIA = long-term, ASIA = temporary (STS/Vocareum)
+KEY_MATCHES=$(git diff --cached -U0 --diff-filter=d | grep -nE '(AKIA|ASIA)[A-Z0-9]{16,}' | grep -v '\.example' | grep -v '#.*AKIA\|#.*ASIA' || true)
+if [ -n "$KEY_MATCHES" ]; then
+  echo -e "${RED}✗ AWS Access Key ID detected in staged changes:${NC}"
+  echo "$KEY_MATCHES" | head -5
+  ERRORS=$((ERRORS + 1))
+fi
+
+# ── Check 3: AWS Secret Access Key pattern ───────────────
+# 40-character base64 string preceded by common variable names
+SECRET_MATCHES=$(git diff --cached -U0 --diff-filter=d | grep -nEi '(secret.?access.?key|aws_secret)["\s=:]+[A-Za-z0-9/+=]{40}' | grep -v '\.example' || true)
+if [ -n "$SECRET_MATCHES" ]; then
+  echo -e "${RED}✗ AWS Secret Access Key pattern detected:${NC}"
+  echo "$SECRET_MATCHES" | head -5
+  ERRORS=$((ERRORS + 1))
+fi
+
+# ── Check 4: Session tokens ─────────────────────────────
+TOKEN_MATCHES=$(git diff --cached -U0 --diff-filter=d | grep -nEi '(session.?token)["\s=:]+[A-Za-z0-9/+=]{100,}' | grep -v '\.example' || true)
+if [ -n "$TOKEN_MATCHES" ]; then
+  echo -e "${RED}✗ AWS Session Token detected:${NC}"
+  echo "    (token too long to display — check staged diff)"
+  ERRORS=$((ERRORS + 1))
+fi
+
+# ── Check 5: Generic high-entropy secrets ────────────────
+# Look for common secret variable assignments with actual values (not placeholders)
+GENERIC_MATCHES=$(git diff --cached -U0 --diff-filter=d | grep -nEi '(password|passwd|secret|token|private.?key)\s*[=:]\s*["\x27][^"\x27]{8,}' | grep -v '\.example' | grep -v '\.md' | grep -v '\.\.\.' | grep -v 'TBD' | grep -v '#' || true)
+if [ -n "$GENERIC_MATCHES" ]; then
+  echo -e "${RED}✗ Possible secret value detected:${NC}"
+  echo "$GENERIC_MATCHES" | head -5
+  ERRORS=$((ERRORS + 1))
+fi
+
+# ── Result ───────────────────────────────────────────────
+if [ $ERRORS -gt 0 ]; then
+  echo ""
+  echo -e "${RED}Commit blocked: $ERRORS secret check(s) failed.${NC}"
+  echo ""
+  echo "If this is a false positive, bypass with:  git commit --no-verify"
+  exit 1
+fi
+
+echo -e "${GREEN}✓${NC} No secrets detected in staged changes."
+exit 0

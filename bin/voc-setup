@@ -119,7 +119,19 @@ else
   ok "Terraform v${TERRAFORM_VERSION} installed to bin/"
 fi
 
-# ── Step 5: Summary ───────────────────────────────────
+# ── Step 5: Install pre-commit hook ────────────────────
+HOOK_SRC="$PROJECT_ROOT/bin/pre-commit-hook"
+HOOK_DST="$PROJECT_ROOT/.git/hooks/pre-commit"
+
+if [ -f "$HOOK_SRC" ]; then
+  cp "$HOOK_SRC" "$HOOK_DST"
+  chmod +x "$HOOK_DST"
+  ok "Pre-commit secrets detection hook installed"
+else
+  warn "Pre-commit hook source not found at $HOOK_SRC"
+fi
+
+# ── Step 6: Summary ───────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════"
 echo -e "${GREEN}  Setup complete.${NC}"
