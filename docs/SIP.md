@@ -300,6 +300,7 @@ VITE_USER_POOL_ID=$(cd ~/Projects/clAWS/deploy && terraform output -raw cognito_
 VITE_USER_POOL_CLIENT_ID=$(cd ~/Projects/clAWS/deploy && terraform output -raw cognito_user_pool_client_id 2>/dev/null)
 VITE_IDENTITY_POOL_ID=$(cd ~/Projects/clAWS/deploy && terraform output -raw cognito_identity_pool_id 2>/dev/null)
 VITE_APPSYNC_GRAPHQL_URL=$(cd ~/Projects/clAWS/deploy && terraform output -raw appsync_graphql_url 2>/dev/null)
+VITE_SETTINGS_PARAMETER=$(cd ~/Projects/clAWS/deploy && terraform output -raw ssm_settings_parameter 2>/dev/null)
 EOF
 
 # Install dependencies and start
